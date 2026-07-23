@@ -1,0 +1,332 @@
+---
+title: "gene filtering"
+author: "xu"
+date: "2025-08-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://cloud.r-project.org"),
+        stringsAsFactors = FALSE)
+
+pkgs <- c("dplyr","tibble","tidyr","ggplot2","ggrepel","readr","readxl")
+to_install <- setdiff(pkgs, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install)
+
+library(dplyr); library(tibble); library(tidyr)
+library(ggplot2); library(ggrepel)
+library(readr); library(readxl)
+library(GEOquery)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(purrr) 
+
+knitr::opts_chunk$set(error = TRUE)  
+
+```
+
+
+```{r}
+metadata<-read.table("C:/Users/Astrid Xu/Downloads/Brawand_metadata_2011.txt",sep="\t",header=T,fill=T)
+head(metadata)
+metadata_cerebellum <- metadata[metadata$Tissue=="Cerebellum",]
+data_cerebellum <- metadata_cerebellum[, c("SampleID", "ID", "Species", "Raw.reads", "RIN")]
+
+head(data_cerebellum)
+write.table(data_cerebellum, 
+            file = "data_cerebellum.txt", 
+            sep = "\t",               
+            quote = FALSE,           
+            row.names = FALSE)   
+getwd()
+
+
+excel_sheets("C:/Users/Astrid Xu/Downloads/1-s2.0-S1874939921000833-mmc1.xlsx")
+
+
+human_tf <- read_excel("C:/Users/Astrid Xu/Downloads/1-s2.0-S1874939921000833-mmc1.xlsx", sheet = "A. Human dbTF catalogue")
+head(human_tf)
+TF_symbols<- unique (human_tf$`HGNC approved gene symbol`)
+head(TF_symbols)
+
+amniotes_df<-read.table("C:/Users/Astrid Xu/Downloads/NormalizedRPKM_ConstitutiveAlignedExons_Amniote1to1Orthologues.txt",header=T,sep="\t")
+primate_df<-read.table("C:/Users/Astrid Xu/Downloads/NormalizedRPKM_ConstitutiveAlignedExons_Primate1to1Orthologues.txt",header=T,sep="\t")
+a_gene_metadata<-read.table("C:/Users/Astrid Xu/Downloads/gene_metadata_mapping.txt",header=T,sep="\t",fill=T)
+a_gene_metadata<-a_gene_metadata %>% select(Ensembl,Symbol,Modules)
+rownames(a_gene_metadata)<-a_gene_metadata$Ensembl
+
+
+a_nc <- amniotes_df[,10:ncol(amniotes_df)]
+rownames(a_nc)<-amniotes_df[,1]
+
+a_nc_comp<-merge(a_nc,a_gene_metadata,by="row.names")
+a_nc_comp<-a_nc_comp[!(a_nc_comp$Symbol==""),] #get rid of genes with no name
+rownames(a_nc_comp)<-a_nc_comp$Symbol
+```
+
+# PCA for all tissues
+```{r}
+normcounts<-a_nc_comp[,2:133]
+pca_res <- prcomp(normcounts, scale. = TRUE)
+summary(pca_res)
+
+pca_df<-as.data.frame(pca_res$rotation[,1:10])
+pca_df<-pca_df %>% mutate(organism=as.factor(str_split_i(rownames(pca_df),"\\.",1)),tissue=as.factor(str_split_i(rownames(pca_df),"\\.",2)))
+
+pca_df$organism <- recode_factor(pca_df$organism,'hsa'="Human",'ptr'="Chimpanzee",'ppa'="Bonobo",'ggo'="Gorilla",'ppy'="Orangutan",'mml'="Macaque",'mmu'="Mouse",
+                                 'mdo'="Opossum",'oan'="Platypus",'gga'="Chicken")
+
+pca_df$tissue <- recode_factor(pca_df$tissue,'br'="Brain",'cb'="Cerebellum",'ht'="Heart",'kd'="Kidney",'lv'="Liver",'ts'="Testis")
+```
+
+
+# PCA for only brain tissues
+```{r}
+nc_brain<-a_nc_comp[,str_detect(colnames(a_nc_comp),c("br|cb"))]
+pca_res_2 <- prcomp(nc_brain, scale. = TRUE)
+summary(pca_res_2)
+
+pca_df_2<-as.data.frame(pca_res_2$rotation[,1:10])
+pca_df_2<-pca_df_2 %>% mutate(organism=as.factor(str_split_i(rownames(pca_df_2),"\\.",1)),tissue=as.factor(str_split_i(rownames(pca_df_2),"\\.",2)))
+
+pca_df_2$organism <- recode_factor(pca_df_2$organism,'hsa'="Human",'ptr'="Chimpanzee",'ppa'="Bonobo",'ggo'="Gorilla",'ppy'="Orangutan",'mml'="Macaque",'mmu'="Mouse",
+                                 'mdo'="Opossum",'oan'="Platypus",'gga'="Chicken")
+
+pca_df_2$tissue <- recode_factor(pca_df_2$tissue,'br'="Brain",'cb'="Cerebellum",'ht'="Heart",'kd'="Kidney",'lv'="Liver",'ts'="Testis")
+```
+
+# select top 200&bottom200 genes
+```{r}
+loading_df <- as.data.frame(pca_res$x)
+loading_df$gene <- rownames(loading_df)
+
+top_pc1_genes <- loading_df %>%
+  arrange(desc(PC1)) %>%
+  slice(1:200) %>%
+  pull(gene)
+
+bottom_pc1_genes <- loading_df %>%
+  arrange(PC1) %>%
+  slice(1:200) %>%
+  pull(gene)
+
+top_pc2_genes <- loading_df %>%
+  arrange(desc(PC2)) %>%
+  slice(1:200) %>%
+  pull(gene)
+
+bottom_pc2_genes <- loading_df %>%
+  arrange(PC2) %>%
+  slice(1:200) %>%
+  pull(gene)
+
+top_pc3_genes <- loading_df %>%
+  arrange(desc(PC3)) %>%
+  slice(1:200) %>%
+  pull(gene)
+
+bottom_pc3_genes <- loading_df %>%
+  arrange(PC3) %>%
+  slice(1:200) %>%
+  pull(gene)
+```
+
+# merge
+```{r}
+tb_genes <- unique(c(
+  top_pc1_genes,    bottom_pc1_genes,
+  top_pc2_genes,    bottom_pc2_genes,
+  top_pc3_genes,    bottom_pc3_genes
+))
+
+
+PC_tfs <- intersect(tb_genes, TF_symbols)
+show(PC_tfs)
+PC_TF <- data.frame(PC_TF= PC_tfs)
+write.csv(PC_TF, "PC-TF.csv",row.names = FALSE)
+getwd()
+```
+
+```{r}
+#GO enrichment analysis
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(ggplot2)
+library(dplyr)
+
+install.packages("Matrix")
+install.packages("Seurat")
+
+gene_df <- bitr(tb_genes,
+                fromType = "SYMBOL",
+                toType = "ENTREZID",
+                OrgDb = org.Hs.eg.db)
+
+
+missing_genes <- setdiff(tb_genes, gene_df$SYMBOL)
+if (length(missing_genes) > 0) {
+  message("The following genes could not be converted and were skipped: ", paste(missing_genes, collapse = ", "))
+}
+
+#GO
+ego_tb <- enrichGO(gene         = gene_df$ENTREZID,
+                   OrgDb        = org.Hs.eg.db,
+                   ont          = "BP",
+                   pAdjustMethod = "BH",
+                   qvalueCutoff  = 0.05,
+                   readable      = TRUE)
+print(head(ego_tb))
+
+
+dotplot(ego_tb, showCategory = 15) + ggtitle("GO Enrichment of PC3 Top/Bottom Genes")
+```
+
+```{r}
+cb_pc_df <- pca_df_2 %>%
+  mutate(Sample = rownames(pca_df_2)) %>%
+  filter(tissue == "Cerebellum") %>%
+  select(Sample, organism, starts_with("PC"))
+
+species_pc <- cb_pc_df %>%
+  group_by(organism) %>%
+  summarise(
+    PC1_mean = mean(PC1, na.rm = TRUE),
+    PC2_mean = mean(PC2, na.rm = TRUE),
+    PC3_mean = mean(PC3, na.rm = TRUE),
+    n_samples = n(),
+    .groups = "drop"
+  )
+species_pc
+
+```
+# sample_to_species projection
+```{r}
+library(tibble)
+sample_to_species <- cb_pc_df %>% select(Sample, organism)
+
+expr_cb <- as.data.frame(nc_brain) 
+expr_cb$gene <- rownames(expr_cb)
+
+expr_long <- expr_cb %>%
+  pivot_longer(-gene, names_to = "Sample", values_to = "expr") %>%
+  left_join(sample_to_species, by = "Sample") %>%
+  filter(!is.na(organism))   
+
+species_expr_long <- expr_long %>%
+  group_by(organism, gene) %>%
+  summarise(expr_mean = mean(expr, na.rm = TRUE), .groups = "drop")
+```
+
+# species × gene 
+```{r}
+species_expr_long$gene <- as.character(species_expr_long$gene)
+species_expr_mat <- species_expr_long %>%
+  pivot_wider(names_from = gene, values_from = expr_mean)
+
+species_expr_mat <- species_expr_mat %>%
+  as.data.frame()
+rownames(species_expr_mat) <- species_expr_mat$organism
+species_expr_mat$organism <- NULL
+
+dim(species_expr_mat) 
+
+
+library(stats)
+
+TF_in_data <- c(
+  "TEF", "HOXB13", "PDX1", "MSGN1", "POU1F1", "EVX1", "NOBOX", "FOXN1",
+  "OLIG3", "RFX6", "CDX1", "POU2F3", "DRGX", "PAX9", "DMBX1", "MYF6",
+  "GSC", "IKZF3", "GCM2", "TLX1", "GCM1", "PAX5", "NR5A2", "MYB", "TFAP2C",
+  "MYOG", "ZNF750", "LHX8", "FERD3L", "TP63", "ONECUT1", "HESX1", "GRHL2",
+  "TBX4", "HNF4A", "BHLHE40", "SKI", "MEF2C", "FOXG1"
+)
+length(TF_in_data)
+
+
+common_species <- intersect(rownames(species_expr_mat), species_pc$organism)
+expr_mat_cs <- species_expr_mat[common_species, , drop = FALSE]
+pc_cs <- species_pc %>% filter(organism %in% common_species) %>% arrange(organism)
+expr_mat_cs <- expr_mat_cs[pc_cs$organism, , drop = FALSE]  
+expr_present_species <- rowSums(expr_mat_cs[, col_indices, drop = FALSE] > 1, na.rm = TRUE)
+```
+#spearman correlation
+```{r}
+safe_spearman <- function(x, y) {
+  ok <- is.finite(x) & is.finite(y)
+  if (sum(ok) < 3) return(c(rho = NA_real_, p = NA_real_))
+  ct <- suppressWarnings(cor.test(x[ok], y[ok], method = "spearman", exact = FALSE))
+  c(rho = unname(ct$estimate), p = ct$p.value)
+}
+
+
+pcs <- c("PC1_mean", "PC2_mean", "PC3_mean")
+pc_mat <- as.matrix(pc_cs[, pcs, drop = FALSE])
+
+res_list <- list()
+
+for (pc_name in pcs) {
+  y <- pc_mat[, pc_name]
+  tmp <- lapply(TF_in_data, function(tf) {
+    x <- expr_mat_cs[, tf]
+    out <- safe_spearman(x, y)
+    data.frame(TF = tf, PC = pc_name,
+               Spearman_r = out["rho"],
+               p_value = out["p"],
+               n_species = sum(is.finite(x) & is.finite(y)))
+  })
+  tmp <- bind_rows(tmp)
+  tmp$FDR <- p.adjust(tmp$p_value, method = "BH")
+  res_list[[pc_name]] <- tmp
+}
+
+corr_table <- bind_rows(res_list) %>%
+  arrange(PC, FDR, desc(abs(Spearman_r)))
+
+head(corr_table, 10)
+```
+#filter out zero counts
+```{r}
+nonzero_counts <- colSums(expr_mat_cs > 0, na.rm = TRUE)
+corr_table$nonzero_species <- nonzero_counts[corr_table$TF]
+write.csv(corr_table, "TF_vs_PC_spearman_species_level.csv", row.names = FALSE)
+
+
+
+sig_hits <- corr_table %>%
+  filter(!is.na(FDR), FDR < 0.5, n_species >= 5,  nonzero_species >= 5    ) %>%
+  arrange(PC, FDR)
+
+sig_hits %>% group_by(PC) %>% slice_head(n = 10)
+write.csv(sig_hits, "TF_vs_PC.csv", row.names = FALSE)
+
+library(ggplot2)
+plot_tf_vs_pc <- function(TF_in_data, pc_name = "PC1_mean") {
+  df <- tibble(
+    organism = rownames(expr_mat_cs),
+    TF_expr = expr_mat_cs[, TF_in_data],
+    PC = pc_mat[, pc_name]
+  )
+  ggplot(df, aes(x = TF_expr, y = PC, label = organism)) +
+    geom_point(size = 3) +
+    ggrepel::geom_text_repel(size = 3) +
+    geom_smooth(method = "lm", se = FALSE, color = "red") +  
+    labs(title = paste0(TF_in_data, " vs ", pc_name, " (species-level)"),
+         x = paste0(TF_in_data, " mean expression (cerebellum)"),
+         y = pc_name) +
+    theme_classic()
+}
+
+
+```
+#visualization
+```{r}
+plot_tf_vs_pc(TF_in_data=sig_hits$TF[1], pc_name = sig_hits$PC[1])
+plot_tf_vs_pc(TF_in_data=sig_hits$TF[2], pc_name = sig_hits$PC[2])
+plot_tf_vs_pc(TF_in_data=sig_hits$TF[3], pc_name = sig_hits$PC[3])
+plot_tf_vs_pc(TF_in_data=sig_hits$TF[4], pc_name = sig_hits$PC[4])
+plot_tf_vs_pc(TF_in_data=sig_hits$TF[5], pc_name = sig_hits$PC[5])
+plot_tf_vs_pc(TF_in_data=sig_hits$TF[6], pc_name = sig_hits$PC[6])
+```
